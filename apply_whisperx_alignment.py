@@ -20,11 +20,12 @@ import comfy.model_patcher
 
 logger = logging.getLogger(__name__)
 
-# WhisperX依赖检查
+# WhisperX依赖检查和版本兼容性验证
 try:
     import whisperx
     WHISPERX_AVAILABLE = True
-    logger.info(f"WhisperX版本: {whisperx.__version__ if hasattr(whisperx, '__version__') else 'Unknown'}")
+    whisperx_version = getattr(whisperx, '__version__', 'Unknown')
+    logger.info(f"WhisperX版本: {whisperx_version}")
 except ImportError as e:
     WHISPERX_AVAILABLE = False
     whisperx = None
@@ -32,9 +33,30 @@ except ImportError as e:
 
 try:
     import ctranslate2
-    logger.info(f"CTranslate2版本: {ctranslate2.__version__ if hasattr(ctranslate2, '__version__') else 'Unknown'}")
+    ctranslate2_version = getattr(ctranslate2, '__version__', 'Unknown')
+    logger.info(f"CTranslate2版本: {ctranslate2_version}")
+    
+    # 版本兼容性检查
+    if ctranslate2_version != 'Unknown':
+        major_version = int(ctranslate2_version.split('.')[0])
+        if major_version >= 4:
+            logger.warning("⚠️ CTranslate2版本较新，可能与WhisperX不兼容。推荐使用3.24.0版本")
 except ImportError:
     logger.warning("CTranslate2未安装，可能导致WhisperX功能异常")
+
+try:
+    import pyannote.audio
+    pyannote_version = getattr(pyannote.audio, '__version__', 'Unknown')
+    logger.info(f"Pyannote.audio版本: {pyannote_version}")
+    
+    # 版本兼容性警告
+    if pyannote_version != 'Unknown':
+        major_version = int(pyannote_version.split('.')[0])
+        if major_version >= 3:
+            logger.warning("⚠️ Pyannote.audio版本(3.x)与WhisperX训练版本(0.x)存在巨大差异，可能影响VAD质量")
+            logger.info("💡 建议: 考虑禁用VAD或降级到兼容版本")
+except ImportError:
+    logger.info("Pyannote.audio未安装，将不支持高级VAD功能")
 
 WHISPERX_MODEL_SUBDIR = os.path.join("stt", "whisperx")
 WHISPERX_PATCHER_CACHE = {}
@@ -217,7 +239,7 @@ class ApplyWhisperXAlignmentNode:
                 "reference_text": ("STRING", {
                     "multiline": True,
                     "default": "",
-                    "placeholder": "输入准确的参考文本。WhisperX将把此文本中的每个词精确对齐到音频时间点。\n注意：这是真正的强制对齐，需要文本与音频内容完全匹配！"
+                    "placeholder": "可选：输入参考文本用于内容替换。\n如果留空，将直接使用ASR转录结果。\n如果提供，将使用ASR的时间戳但显示您的参考文本内容。"
                 }),
                 "model": (model_options, {"default": "base"}),
             },
@@ -226,10 +248,6 @@ class ApplyWhisperXAlignmentNode:
                 "return_char_alignments": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "是否返回字符级别的对齐信息（需要模型支持）"
-                }),
-                "alignment_mode": (["forced_alignment", "asr_with_mapping"], {
-                    "default": "forced_alignment",
-                    "tooltip": "对齐模式：强制对齐（推荐）或ASR转录后映射（备用）"
                 }),
             }
         }
@@ -244,59 +262,80 @@ class ApplyWhisperXAlignmentNode:
                                reference_text: str,
                                model: str,
                                language: str = "auto",
-                               return_char_alignments: bool = False,
-                               alignment_mode: str = "forced_alignment") -> Tuple[str, List[Dict], List[Dict], str]:
+                               return_char_alignments: bool = False) -> Tuple[str, List[Dict], List[Dict], str]:
         """
-        执行WhisperX真正的强制对齐（Forced Alignment）
+        执行WhisperX音频转录和智能文本对齐
         
-        强制对齐是指：给定准确的参考文本和音频，将文本中的每个词/句精确地
-        对齐到音频的具体时间段。这要求参考文本与音频内容完全匹配。
+        最佳实践流程：
+        1. ASR转录获得准确的时间戳
+        2. 尝试WhisperX对齐优化（失败则回退）
+        3. 智能映射到参考文本（如果提供）
+        4. 自动文本清洗和错误恢复
         
         Args:
             audio: 音频张量字典 {"waveform": tensor, "sample_rate": int}
-            reference_text: 准确的参考文本（必须与音频内容匹配）
+            reference_text: 参考文本（用于替换ASR识别的内容，可选）
             model: WhisperX模型大小
             language: 语言（auto为自动检测）
             return_char_alignments: 是否返回字符级对齐
-            alignment_mode: 对齐模式（强制对齐或ASR+映射）
             
         Returns:
-            (对齐后文本, 句级对齐数据, 词级对齐数据, 处理日志)
+            (最终文本, 句级对齐数据, 词级对齐数据, 处理日志)
         """
         log_messages = []
         
         try:
-            # 显示对齐模式
-            mode_display = "强制对齐" if alignment_mode == "forced_alignment" else "ASR+映射对齐"
-            log_messages.append(f"🎯 对齐模式: {mode_display}")
-            
-            if alignment_mode == "forced_alignment":
-                log_messages.append("💡 强制对齐：将参考文本中的每个词精确对齐到音频时间点")
-                log_messages.append("⚠️ 注意：参考文本必须与音频内容完全匹配才能获得最佳效果")
-            else:
-                log_messages.append("💡 ASR+映射：先进行语音识别，再将结果映射到参考文本")
-            
-            # 验证输入
-            if not reference_text.strip():
-                error_msg = "请提供准确的参考文本用于对齐"
-                log_messages.append(f"❌ {error_msg}")
-                return "", [], [], "\n".join(log_messages)
-            
-            log_messages.append(f"📝 参考文本长度: {len(reference_text)} 字符")
+            log_messages.append("🎯 WhisperX智能对齐模式：ASR转录 + 对齐优化 + 文本映射")
             log_messages.append(f"🤖 使用模型: {model}")
             log_messages.append(f"🌍 语言设置: {language}")
+            
+            # 参考文本是可选的
+            if reference_text.strip():
+                log_messages.append(f"📝 参考文本长度: {len(reference_text)} 字符（将用于内容替换）")
+                # 显示参考文本前100个字符用于调试
+                preview_text = reference_text.strip()[:100]
+                log_messages.append(f"📄 参考文本预览: {preview_text}{'...' if len(reference_text.strip()) > 100 else ''}")
+            else:
+                log_messages.append("📝 未提供参考文本，将直接使用ASR转录结果")
+            
+            # 音频信息
+            log_messages.append(f"🎵 音频信息: 采样率={audio['sample_rate']}, 形状={audio['waveform'].shape}")
+            
+            # 预处理音频张量确保格式正确
+            waveform = audio['waveform']
+            if len(waveform.shape) == 1:
+                waveform = waveform.unsqueeze(0)  # 添加channel维度
+            elif len(waveform.shape) == 3:
+                waveform = waveform.squeeze(0)  # 移除batch维度
+            
+            # 确保是单声道
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)  # 转换为单声道
+            
+            log_messages.append(f"🔧 预处理后音频形状: {waveform.shape}")
             
             # 保存音频到临时文件
             temp_dir = folder_paths.get_temp_directory()
             os.makedirs(temp_dir, exist_ok=True)
             audio_save_path = os.path.join(temp_dir, f"whisperx_{uuid.uuid1()}.wav")
             
-            torchaudio.save(
-                audio_save_path, 
-                audio['waveform'].squeeze(0), 
-                audio["sample_rate"]
-            )
-            log_messages.append(f"💾 音频已保存: {os.path.basename(audio_save_path)}")
+            try:
+                torchaudio.save(
+                    audio_save_path, 
+                    waveform, 
+                    audio["sample_rate"]
+                )
+                # 检查文件是否真的被保存
+                if os.path.exists(audio_save_path):
+                    file_size = os.path.getsize(audio_save_path)
+                    log_messages.append(f"💾 音频已保存: {os.path.basename(audio_save_path)} ({file_size} bytes)")
+                else:
+                    raise RuntimeError("音频文件保存后不存在")
+                    
+            except Exception as save_error:
+                error_msg = f"音频文件保存失败: {save_error}"
+                log_messages.append(f"❌ {error_msg}")
+                return "", [], [], "\n".join(log_messages)
             
             # 获取或创建模型管理器
             language_code = self._get_language_code(language)
@@ -358,58 +397,39 @@ class ApplyWhisperXAlignmentNode:
                 log_messages.append("💡 强制对齐需要对齐模型支持，请检查语言是否受支持")
                 return "", [], [], "\n".join(log_messages)
             
-            # 预处理参考文本：分割成句子
-            log_messages.append("✂️ 预处理参考文本...")
-            reference_segments = self._prepare_reference_text(reference_text, detected_language)
-            log_messages.append(f"📄 参考文本分为 {len(reference_segments)} 个句子")
+            # 第一步：ASR转录获得基础时间戳
+            log_messages.append("🎙️ 第一步：执行ASR转录...")
             
-            # 根据对齐模式选择执行路径
-            if alignment_mode == "forced_alignment":
-                log_messages.append("⚡ 执行真正的强制对齐...")
-                try:
-                    # 构造用于对齐的segments结构，使用参考文本
-                    mock_segments = []
-                    for i, ref_text in enumerate(reference_segments):
-                        mock_segments.append({
-                            "start": 0.0,  # 临时时间，会被对齐覆盖
-                            "end": 0.0,    # 临时时间，会被对齐覆盖
-                            "text": ref_text.strip()
-                        })
-                    
-                    # 使用WhisperX的align函数进行强制对齐
-                    aligned_result = whisperx.align(
-                        mock_segments,
-                        model_a,
-                        metadata,
-                        audio_save_path,
-                        align_device,
-                        return_char_alignments=return_char_alignments
-                    )
-                    
-                    segments = aligned_result["segments"]
-                    words = aligned_result.get("word_segments", [])
-                    
-                    log_messages.append(f"✅ 强制对齐完成: {len(segments)} 句, {len(words)} 词")
-                    
-                except Exception as align_error:
-                    log_messages.append(f"❌ 强制对齐失败: {align_error}")
-                    log_messages.append("🔄 自动降级为ASR+映射模式...")
-                    alignment_mode = "asr_with_mapping"  # 自动切换模式
-            
-            # ASR+映射模式（或强制对齐失败后的降级）
-            if alignment_mode == "asr_with_mapping":
-                log_messages.append("🎙️ 执行ASR转录+文本映射...")
-                
-                # 先进行ASR转录
+            try:
                 transcribe_result = whisperx_model.transcribe(
                     audio_save_path,
                     batch_size=16,
                     language=detected_language if detected_language != "auto" else None
                 )
                 
-                log_messages.append(f"🎙️ ASR转录完成: {len(transcribe_result['segments'])} 个片段")
+                if not transcribe_result or "segments" not in transcribe_result:
+                    raise RuntimeError("ASR转录返回空结果或格式错误")
                 
-                # 使用转录结果进行对齐
+                segments_count = len(transcribe_result.get('segments', []))
+                log_messages.append(f"✅ ASR转录完成: {segments_count} 个片段")
+                
+                if segments_count == 0:
+                    log_messages.append("⚠️ ASR转录未检测到任何语音片段")
+                    # 返回空结果而不是抛出错误
+                    return "", [], [], "\n".join(log_messages)
+                    
+            except Exception as transcribe_error:
+                error_msg = f"ASR转录失败: {transcribe_error}"
+                log_messages.append(f"❌ {error_msg}")
+                logger.error(error_msg)
+                import traceback
+                logger.error(traceback.format_exc())
+                return "", [], [], "\n".join(log_messages)
+            
+            # 第二步：尝试WhisperX对齐优化（自动容错）
+            log_messages.append("⚡ 第二步：尝试WhisperX对齐优化...")
+            
+            try:
                 aligned_result = whisperx.align(
                     transcribe_result["segments"],
                     model_a,
@@ -419,13 +439,65 @@ class ApplyWhisperXAlignmentNode:
                     return_char_alignments=return_char_alignments
                 )
                 
-                segments = aligned_result["segments"] 
+                segments = aligned_result["segments"]
+                # 🚨 关键修复：确保正确提取words数据
                 words = aligned_result.get("word_segments", [])
                 
-                log_messages.append(f"🔗 ASR对齐完成: {len(segments)} 句, {len(words)} 词")
+                # 如果word_segments为空，从segments中提取
+                if not words:
+                    log_messages.append("🔧 word_segments为空，从segments中提取words...")
+                    for segment in segments:
+                        if "words" in segment and segment["words"]:
+                            words.extend(segment["words"])
                 
-                # 尝试将ASR结果映射到参考文本
-                segments, words = self._map_to_reference_text(segments, words, reference_text, log_messages)
+                # 强制日志显示 - 使用logger确保显示
+                debug_info = f"WhisperX对齐调试: segments={len(segments)}, words={len(words)}"
+                logger.info(debug_info)
+                log_messages.append(f"🔍 {debug_info}")
+                
+                if words:
+                    first_word = words[0]
+                    logger.info(f"第一个词示例: {first_word}")
+                    log_messages.append(f"📝 第一个词: {first_word}")
+                
+                log_messages.append(f"✅ WhisperX对齐完成: {len(segments)} 句, {len(words)} 词")
+                
+            except Exception as align_error:
+                log_messages.append(f"⚠️ WhisperX对齐失败: {align_error}")
+                log_messages.append("🔄 自动回退到ASR原始结果")
+                segments = transcribe_result["segments"]
+                words = []
+                
+                # 从segments生成word-level数据作为备用
+                for segment in segments:
+                    if "words" in segment and segment["words"]:
+                        words.extend(segment["words"])
+                    else:
+                        # 如果segment没有words，生成简单的word分割
+                        segment_words = self._generate_words_from_segment(segment)
+                        words.extend(segment_words)
+                
+                log_messages.append(f"📝 从segments生成了 {len(words)} 个词级数据")
+            
+            # 第三步：智能文本映射（如果提供参考文本）
+            if reference_text.strip():
+                log_messages.append("🔄 第三步：智能映射到参考文本...")
+                # 自动清洗参考文本
+                cleaned_text = self._auto_clean_text(reference_text)
+                if len(cleaned_text) != len(reference_text):
+                    log_messages.append(f"🧹 文本自动清洗: {len(reference_text)} -> {len(cleaned_text)} 字符")
+                
+                segments, words = self._map_to_reference_text(segments, words, cleaned_text, log_messages)
+            else:
+                log_messages.append("📝 第三步：无参考文本，保持ASR原始结果")
+            
+            # 确保总是有words数据用于字幕渲染
+            if len(words) == 0 and len(segments) > 0:
+                log_messages.append("🔧 生成词级对齐数据以支持字幕渲染...")
+                for segment in segments:
+                    segment_words = self._generate_words_from_segment(segment)
+                    words.extend(segment_words)
+                log_messages.append(f"📝 生成了 {len(words)} 个词用于字幕渲染")
             
             log_messages.append(f"🎉 对齐完成! 句子: {len(segments)}, 词语: {len(words)}")
             
@@ -444,20 +516,20 @@ class ApplyWhisperXAlignmentNode:
                 }
                 segments_alignment.append(segment_data)
                 aligned_text_parts.append(segment_data["value"])
-                
-                # 词级别对齐
-                if "words" in segment:
-                    for word in segment["words"]:
-                        word_data = {
-                            "start": word.get("start", segment_data["start"]),
-                            "end": word.get("end", segment_data["end"]),
-                            "value": word.get("word", "").strip(),
-                            "confidence": word.get("confidence", 1.0)
-                        }
-                        words_alignment.append(word_data)
+            
+            # 🚨 修复：直接处理words变量，而不是从segments中重新提取
+            for word in words:
+                word_data = {
+                    "start": word.get("start", 0.0),
+                    "end": word.get("end", 0.0),
+                    "value": word.get("word", "").strip(),
+                    "confidence": word.get("score", word.get("confidence", 1.0))
+                }
+                words_alignment.append(word_data)
             
             # 生成对齐后的完整文本
             aligned_text = " ".join(aligned_text_parts)
+            log_messages.append(f"📄 生成最终文本: {len(aligned_text)} 字符")
             
             # 清理临时文件
             try:
@@ -470,9 +542,32 @@ class ApplyWhisperXAlignmentNode:
             log_messages.append(f"  - 对齐句子数: {len(segments_alignment)}")
             log_messages.append(f"  - 对齐词语数: {len(words_alignment)}")
             log_messages.append(f"  - 检测语言: {detected_language}")
-            log_messages.append(f"  - 文本匹配度: {self._calculate_text_similarity(reference_text, aligned_text):.1%}")
+            if reference_text.strip():
+                log_messages.append(f"  - 文本匹配度: {self._calculate_text_similarity(reference_text, aligned_text):.1%}")
             
-            return aligned_text, segments_alignment, words_alignment, "\n".join(log_messages)
+            # 质量评估
+            low_confidence_count = len([s for s in segments if s.get("confidence", 1.0) < 0.8])
+            if low_confidence_count > 0:
+                log_messages.append(f"💡 质量提示: {low_confidence_count} 个片段置信度较低")
+                log_messages.append("   建议检查音频质量或参考文本匹配度")
+            
+            log_messages.append("🎉 处理完成！准备返回结果...")
+            
+            # 最终验证和强制日志
+            final_log = "\n".join(log_messages)
+            result_summary = f"WhisperX处理完成: {len(segments_alignment)} 句, {len(words_alignment)} 词, 最终文本长度: {len(aligned_text)}"
+            logger.info(result_summary)
+            
+            # 强制输出关键调试信息到console
+            if len(words_alignment) == 0:
+                logger.error("❌ 严重问题：words_alignment为空！")
+                logger.error(f"原始words数据长度: {len(words)}")
+                if words:
+                    logger.error(f"第一个原始word: {words[0]}")
+            else:
+                logger.info(f"✅ 成功生成 {len(words_alignment)} 个词级对齐数据")
+            
+            return aligned_text, segments_alignment, words_alignment, final_log
             
         except Exception as e:
             error_msg = f"WhisperX对齐过程发生错误: {e}"
@@ -528,11 +623,11 @@ class ApplyWhisperXAlignmentNode:
         return intersection / union if union > 0 else 0.0
     
     def _prepare_reference_text(self, reference_text: str, language: str) -> List[str]:
-        """预处理参考文本，分割成适合对齐的句子片段"""
+        """预处理参考文本，分割成适合对齐的句子片段，并进行自动数据清洗"""
         import re
         
-        # 清理文本
-        text = reference_text.strip()
+        # 清理文本（现在总是启用清洗）
+        text = self._auto_clean_text(reference_text.strip())
         if not text:
             return []
         
@@ -550,21 +645,73 @@ class ApplyWhisperXAlignmentNode:
             sentence = sentence.strip()
             if sentence:
                 # 对于过长的句子，进一步分割
-                if len(sentence) > 200:  # 字符数阈值
+                if len(sentence) > 150:  # 降低阈值，提高对齐成功率
                     # 按逗号或其他标点进一步分割
-                    sub_sentences = re.split(r'[,，、]', sentence)
+                    sub_sentences = re.split(r'[,，、\(\)]', sentence)
                     for sub in sub_sentences:
                         sub = sub.strip()
-                        if sub:
+                        if sub and len(sub) > 3:  # 过滤太短的片段
                             processed_sentences.append(sub)
                 else:
                     processed_sentences.append(sentence)
         
         return processed_sentences if processed_sentences else [text]
     
+    def _auto_clean_text(self, text: str) -> str:
+        """自动清洗文本，移除可能导致对齐失败的元素"""
+        import re
+        
+        # 记录清洗操作
+        original_length = len(text)
+        
+        # 1. 移除特殊符号和标记
+        # 移除星号强调标记 (如 *SOLVED*)
+        text = re.sub(r'\*([^*]*)\*', r'\1', text)
+        
+        # 移除井号标签 (如 #hashtag)
+        text = re.sub(r'#\w+', '', text)
+        
+        # 移除多余的标点符号
+        text = re.sub(r'[!]{2,}', '!', text)  # 多个感叹号
+        text = re.sub(r'[?]{2,}', '?', text)  # 多个问号
+        text = re.sub(r'[.]{2,}', '...', text)  # 多个句号转省略号
+        
+        # 2. 处理括号内容
+        # 移除方括号及其内容 (如 [注释])
+        text = re.sub(r'\[[^\]]*\]', '', text)
+        
+        # 简化长的圆括号内容
+        def simplify_parentheses(match):
+            content = match.group(1)
+            if len(content) > 50:  # 如果括号内容太长，移除
+                return ''
+            return match.group(0)  # 保留短的括号内容
+        
+        text = re.sub(r'\(([^)]*)\)', simplify_parentheses, text)
+        
+        # 3. 标准化空白字符
+        text = re.sub(r'\s+', ' ', text)  # 多个空白字符合并为单个空格
+        text = re.sub(r'\n+', ' ', text)  # 换行符替换为空格
+        
+        # 4. 移除首尾多余字符
+        text = text.strip(' .,;:')
+        
+        # 5. 处理数字和特殊字符组合
+        # 标准化年份表示 (如 1978年 -> 1978)
+        text = re.sub(r'(\d{4})年', r'\1', text)
+        
+        # 标准化百分比 (如 50% -> 50 percent)
+        text = re.sub(r'(\d+)%', r'\1 percent', text)
+        
+        cleaned_length = len(text)
+        if cleaned_length != original_length:
+            logger.info(f"🧹 文本清洗: {original_length} -> {cleaned_length} 字符")
+        
+        return text
+    
     def _map_to_reference_text(self, segments: List[Dict], words: List[Dict], reference_text: str, log_messages: List[str]) -> Tuple[List[Dict], List[Dict]]:
-        """将ASR转录结果映射到参考文本（降级方案）"""
-        log_messages.append("🔄 尝试将ASR结果映射到参考文本...")
+        """将ASR转录结果映射到参考文本（智能降级方案）"""
+        log_messages.append("🔄 执行ASR+智能文本映射...")
         
         # 提取ASR转录的文本
         asr_text = " ".join([seg.get("text", "") for seg in segments])
@@ -573,47 +720,93 @@ class ApplyWhisperXAlignmentNode:
         similarity = self._calculate_text_similarity(reference_text, asr_text)
         log_messages.append(f"📊 ASR与参考文本相似度: {similarity:.1%}")
         
-        if similarity > 0.7:  # 相似度阈值
-            log_messages.append("✅ 相似度较高，直接使用ASR对齐结果")
-            return segments, words
-        else:
-            log_messages.append("⚠️ 相似度较低，尝试文本对齐...")
+        if similarity > 0.3:  # 降低阈值，更宽松的匹配
+            log_messages.append("✅ 相似度可接受，使用ASR对齐结果并调整文本")
             
-            # 简单的文本对齐策略：按时间比例分配
+            # 使用ASR的时间戳，但尝试融合参考文本的内容
+            adjusted_segments = []
             reference_segments = self._prepare_reference_text(reference_text, "en")
-            total_duration = max([seg.get("end", 0) for seg in segments]) if segments else 0.0
             
-            aligned_segments = []
-            for i, ref_text in enumerate(reference_segments):
-                start_time = (i / len(reference_segments)) * total_duration
-                end_time = ((i + 1) / len(reference_segments)) * total_duration
+            # 智能融合：时间来自ASR，内容优先使用参考文本
+            for i, asr_seg in enumerate(segments):
+                if i < len(reference_segments):
+                    # 使用参考文本内容，但保持ASR的时间戳
+                    adjusted_segments.append({
+                        "start": asr_seg.get("start", 0.0),
+                        "end": asr_seg.get("end", 0.0),
+                        "text": reference_segments[i],
+                        "confidence": max(0.6, asr_seg.get("confidence", 0.8))  # 稍微提高置信度
+                    })
+                else:
+                    # 如果参考文本片段不够，保持原ASR结果
+                    adjusted_segments.append(asr_seg)
+            
+            # 如果参考文本还有剩余，按比例分配到末尾
+            if len(reference_segments) > len(segments) and segments:
+                last_end = segments[-1].get("end", 0.0)
+                remaining_segments = reference_segments[len(segments):]
                 
-                aligned_segments.append({
+                # 为剩余文本分配时间（假设每段3秒）
+                for i, ref_text in enumerate(remaining_segments):
+                    start_time = last_end + i * 3.0
+                    end_time = start_time + 3.0
+                    adjusted_segments.append({
+                        "start": start_time,
+                        "end": end_time,
+                        "text": ref_text,
+                        "confidence": 0.5  # 较低置信度，因为是估算时间
+                    })
+            
+            log_messages.append(f"🔗 智能融合完成: {len(adjusted_segments)} 句")
+            return adjusted_segments, words  # 保持原有词级对齐
+            
+        else:
+            log_messages.append("⚠️ 相似度很低，使用纯时间分割方案...")
+            
+            # 完全基于时间的均匀分割（最后的备选方案）
+            reference_segments = self._prepare_reference_text(reference_text, "en")
+            
+            # 计算总时长
+            if segments:
+                total_duration = max([seg.get("end", 0) for seg in segments])
+            else:
+                total_duration = 30.0  # 默认30秒
+            
+            # 均匀分割时间
+            segment_duration = total_duration / len(reference_segments) if reference_segments else 3.0
+            
+            uniform_segments = []
+            for i, ref_text in enumerate(reference_segments):
+                start_time = i * segment_duration
+                end_time = (i + 1) * segment_duration
+                
+                uniform_segments.append({
                     "start": start_time,
-                    "end": end_time,
+                    "end": min(end_time, total_duration),  # 确保不超过总时长
                     "text": ref_text,
-                    "confidence": 0.5  # 标记为低置信度
+                    "confidence": 0.4  # 低置信度，因为是完全估算
                 })
             
-            # 为mapped segments生成简单的word alignment
-            mapped_words = []
-            for seg in aligned_segments:
+            # 生成对应的词级对齐
+            uniform_words = []
+            for seg in uniform_segments:
                 seg_duration = seg["end"] - seg["start"]
                 seg_words = seg["text"].split()
-                if seg_words:
+                if seg_words and seg_duration > 0:
                     word_duration = seg_duration / len(seg_words)
                     for j, word in enumerate(seg_words):
                         word_start = seg["start"] + j * word_duration
-                        word_end = word_start + word_duration
-                        mapped_words.append({
+                        word_end = min(word_start + word_duration, seg["end"])
+                        uniform_words.append({
                             "start": word_start,
                             "end": word_end,
                             "word": word,
-                            "confidence": 0.5
+                            "confidence": 0.4
                         })
             
-            log_messages.append(f"📝 映射完成: {len(aligned_segments)} 句, {len(mapped_words)} 词")
-            return aligned_segments, mapped_words
+            log_messages.append(f"📐 均匀分割完成: {len(uniform_segments)} 句, {len(uniform_words)} 词")
+            log_messages.append("💡 建议：检查参考文本是否与音频内容匹配")
+            return uniform_segments, uniform_words
     
     def _analyze_error(self, error_str: str) -> List[str]:
         """分析错误并提供解决建议"""
@@ -680,6 +873,38 @@ class ApplyWhisperXAlignmentNode:
             ])
         
         return suggestions
+    
+    def _generate_words_from_segment(self, segment: Dict) -> List[Dict]:
+        """从segment生成简单的词级对齐数据"""
+        words = []
+        text = segment.get("text", "").strip()
+        start_time = segment.get("start", 0.0)
+        end_time = segment.get("end", 0.0)
+        duration = end_time - start_time
+        
+        if not text or duration <= 0:
+            return words
+        
+        # 简单地按空格分词
+        word_list = text.split()
+        if not word_list:
+            return words
+        
+        # 平均分配时间
+        word_duration = duration / len(word_list)
+        
+        for i, word in enumerate(word_list):
+            word_start = start_time + i * word_duration
+            word_end = word_start + word_duration
+            
+            words.append({
+                "word": word,
+                "start": word_start,
+                "end": word_end,
+                "confidence": segment.get("confidence", 0.8)
+            })
+        
+        return words
 
 
 # 节点注册
