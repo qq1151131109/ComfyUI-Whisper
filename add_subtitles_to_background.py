@@ -51,7 +51,7 @@ class AddSubtitlesToBackgroundNode:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("IMAGE",)
     FUNCTION = "add_subtitles_to_background"
-    CATEGORY = "whisper"
+    CATEGORY = "字幕"
 
 
     def add_subtitles_to_background(self, images, alignment, font_family, text_displacement, font_size_displacement,num_words, min_font_size, max_font_size, video_fps):

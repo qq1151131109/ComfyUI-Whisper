@@ -98,7 +98,7 @@ class ApplyWhisperNode:
     RETURN_TYPES = ("STRING", "whisper_alignment", "whisper_alignment")
     RETURN_NAMES = ("text", "segments_alignment", "words_alignment")
     FUNCTION = "apply_whisper"
-    CATEGORY = "whisper"
+    CATEGORY = "字幕"
 
     def apply_whisper(self, audio, model, language, prompt):
 

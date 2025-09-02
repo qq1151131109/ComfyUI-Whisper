@@ -1,3 +1,30 @@
 openai-whisper
 pillow
 uuid
+
+# WhisperX强制对齐依赖（可选）
+# ⚠️ 重要：版本兼容性问题说明
+# 如果遇到 "incompatible constructor arguments" 错误，请尝试以下兼容版本组合：
+
+# 推荐组合1（最新稳定）：
+# whisperx>=3.1.1
+# ctranslate2>=3.24.0
+# torch>=1.12.0
+# torchaudio
+# librosa
+
+# 推荐组合2（兼容版本）：
+# whisperx==3.1.1
+# ctranslate2==3.24.0
+# faster-whisper==0.10.1
+
+# 安装命令示例：
+# pip install whisperx==3.1.1 ctranslate2==3.24.0 torch torchaudio librosa
+
+# 增强字幕功能依赖（可选）
+# 已包含在基础依赖中，无需额外安装
+
+# 故障排除：
+# 1. 如果遇到版本冲突，建议使用虚拟环境
+# 2. 确保CUDA版本与PyTorch兼容
+# 3. 某些系统可能需要单独安装ffmpeg

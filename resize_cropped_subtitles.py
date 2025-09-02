@@ -15,7 +15,7 @@ class ResizeCroppedSubtitlesNode:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("IMAGE",)
     FUNCTION = "resize_cropped_subtitles"
-    CATEGORY = "whisper"
+    CATEGORY = "字幕"
 
     def resize_cropped_subtitles(self,cropped_subtitles, original_frames, subtitle_coord):
 

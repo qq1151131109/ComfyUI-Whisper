@@ -45,7 +45,7 @@ class AddSubtitlesToFramesNode:
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "subtitle_coord", )
     RETURN_NAMES = ("IMAGE","MASK", "cropped_subtitles","subtitle_coord",)
     FUNCTION = "add_subtitles_to_frames"
-    CATEGORY = "whisper"
+    CATEGORY = "字幕"
 
 
     def add_subtitles_to_frames(self, images, alignment, font_family, font_size, font_color, x_position, y_position, center_x, center_y, video_fps):

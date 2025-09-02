@@ -1,0 +1,223 @@
+{
+  "last_node_id": 8,
+  "last_link_id": 12,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Load Audio",
+      "pos": [50, 50],
+      "size": {"0": 315, "1": 78},
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {"name": "AUDIO", "type": "AUDIO", "links": [1]}
+      ],
+      "properties": {"Node name for S&R": "Load Audio"},
+      "widgets_values": ["example_audio.wav"]
+    },
+    {
+      "id": 2,
+      "type": "Apply WhisperX Alignment", 
+      "pos": [400, 50],
+      "size": {"0": 400, "1": 300},
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "audio", "type": "AUDIO", "link": 1}
+      ],
+      "outputs": [
+        {"name": "aligned_text", "type": "STRING", "links": [2]},
+        {"name": "segments_alignment", "type": "whisper_alignment", "links": [3]},
+        {"name": "words_alignment", "type": "whisper_alignment", "links": [4]},
+        {"name": "process_log", "type": "STRING", "links": [5]}
+      ],
+      "properties": {"Node name for S&R": "Apply WhisperX Alignment"},
+      "widgets_values": [
+        "这是一段需要进行强制对齐的准确文本内容。WhisperX将会把这段文本与音频进行精确的时间同步，生成高质量的字幕对齐数据。",
+        "base",
+        "Chinese",
+        false
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Load Video",
+      "pos": [50, 200],
+      "size": {"0": 315, "1": 78},
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [6]}
+      ],
+      "properties": {"Node name for S&R": "Load Video"},
+      "widgets_values": ["example_video.mp4"]
+    },
+    {
+      "id": 4,
+      "type": "Add Subtitles Enhanced",
+      "pos": [850, 50], 
+      "size": {"0": 500, "1": 600},
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 6},
+        {"name": "alignment", "type": "whisper_alignment", "link": 3}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [7]},
+        {"name": "MASK", "type": "MASK", "links": [8]},
+        {"name": "cropped_subtitles", "type": "IMAGE", "links": [9]},
+        {"name": "subtitle_coord", "type": "subtitle_coord", "links": [10]},
+        {"name": "render_log", "type": "STRING", "links": [11]}
+      ],
+      "properties": {"Node name for S&R": "Add Subtitles Enhanced"},
+      "widgets_values": [
+        24.0,
+        "Roboto-Bold.ttf",
+        120,
+        "white",
+        100,
+        900,
+        true,
+        true,
+        "black",
+        4,
+        "gray", 
+        3,
+        3,
+        "#000000AA",
+        0.8,
+        25,
+        "",
+        "center",
+        1.3,
+        1200,
+        0.2,
+        0.2,
+        true,
+        "none"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "Save Video",
+      "pos": [1400, 50],
+      "size": {"0": 315, "1": 78}, 
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 7}
+      ],
+      "properties": {"Node name for S&R": "Save Video"},
+      "widgets_values": ["whisperx_aligned_subtitles.mp4"]
+    },
+    {
+      "id": 6,
+      "type": "Console Print",
+      "pos": [850, 700],
+      "size": {"0": 400, "1": 200},
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 5}
+      ],
+      "properties": {"Node name for S&R": "Console Print"},
+      "title": "WhisperX处理日志"
+    },
+    {
+      "id": 7,
+      "type": "Console Print", 
+      "pos": [1400, 200],
+      "size": {"0": 400, "1": 200},
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {"name": "text", "type": "STRING", "link": 11}
+      ],
+      "properties": {"Node name for S&R": "Console Print"},
+      "title": "字幕渲染日志"
+    },
+    {
+      "id": 8,
+      "type": "Preview Image",
+      "pos": [1400, 450],
+      "size": {"0": 400, "1": 300},
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 9}
+      ],
+      "properties": {"Node name for S&R": "Preview Image"},
+      "title": "裁剪字幕预览"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "AUDIO"],
+    [2, 2, 0, 6, 0, "STRING"],
+    [3, 2, 1, 4, 1, "whisper_alignment"],
+    [4, 2, 2, null, null, "whisper_alignment"],
+    [5, 2, 3, 6, 0, "STRING"],
+    [6, 3, 0, 4, 0, "IMAGE"],
+    [7, 4, 0, 5, 0, "IMAGE"],
+    [8, 4, 1, null, null, "MASK"],
+    [9, 4, 2, 8, 0, "IMAGE"],
+    [10, 4, 3, null, null, "subtitle_coord"],
+    [11, 4, 4, 7, 0, "STRING"],
+    [12, 2, 1, null, null, "whisper_alignment"]
+  ],
+  "groups": [
+    {
+      "title": "音频输入",
+      "bounding": [30, 10, 360, 150],
+      "color": "#3f789e",
+      "font_size": 24
+    },
+    {
+      "title": "WhisperX强制对齐",
+      "bounding": [380, 10, 440, 360],
+      "color": "#8f5cbe", 
+      "font_size": 24
+    },
+    {
+      "title": "视频输入",
+      "bounding": [30, 180, 360, 100], 
+      "color": "#3f789e",
+      "font_size": 24
+    },
+    {
+      "title": "增强字幕渲染",
+      "bounding": [830, 10, 540, 680],
+      "color": "#a1309b",
+      "font_size": 24
+    },
+    {
+      "title": "输出和预览",
+      "bounding": [1380, 10, 440, 550],
+      "color": "#b06634",
+      "font_size": 24
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7,
+      "offset": [-50, 0]
+    },
+    "info": {
+      "name": "WhisperX强制对齐字幕工作流",
+      "author": "ComfyUI-Whisper Enhanced",
+      "description": "使用WhisperX进行音频文本强制对齐，然后使用增强字幕节点添加高质量字幕到视频",
+      "version": "1.0",
+      "created": "2024-01-20",
+      "modified": "2024-01-20"
+    }
+  }
+}
