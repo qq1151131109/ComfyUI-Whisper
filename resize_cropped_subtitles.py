@@ -1,5 +1,8 @@
 from .utils import tensor2pil, pil2tensor
 from PIL import Image
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ResizeCroppedSubtitlesNode:
     @classmethod
@@ -23,7 +26,9 @@ class ResizeCroppedSubtitlesNode:
         pil_images_cropped = tensor2pil(cropped_subtitles)
         final_images = []
 
-        print(len(cropped_subtitles), len(original_frames), len(subtitle_coord))
+        # 验证输入数据长度一致性
+        if len(cropped_subtitles) != len(original_frames) or len(original_frames) != len(subtitle_coord):
+            logger.warning(f"输入数据长度不一致: subtitles={len(cropped_subtitles)}, frames={len(original_frames)}, coords={len(subtitle_coord)}")
 
         width, height = pil_images_og[0].size
 

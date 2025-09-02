@@ -74,52 +74,60 @@ class AddSubtitlesToFramesNode:
             alignment_obj = alignment[i]
             start_frame_no = math.floor(alignment_obj["start"] * video_fps)
             end_frame_no = math.floor(alignment_obj["end"] * video_fps)
+            
+            # 安全的帧索引范围检查
+            start_frame_no = max(0, min(start_frame_no, len(pil_images) - 1))
+            end_frame_no = max(start_frame_no, min(end_frame_no, len(pil_images)))
 
             # create images without text
-            for i in range(last_frame_no, start_frame_no):
-                img = pil_images[i].convert("RGB")
-                width, height = img.size
-                pil_images_with_text.append(img)
+            for frame_idx in range(last_frame_no, start_frame_no):
+                if frame_idx < len(pil_images):
+                    img = pil_images[frame_idx].convert("RGB")
+                    width, height = img.size
+                    pil_images_with_text.append(img)
 
-                # create mask + cropped image
-                black_img = Image.new('RGB', (width, height), 'black')
-                pil_images_masks.append(black_img)
-                black_img = Image.new('RGB', (1, 1), 'black') # to prevent max() from considering these images, use very small size
-                cropped_pil_images_with_text.append(black_img)  
-                subtitle_coord.append((0,0,0,0))
-
-
-            for i in range(start_frame_no,end_frame_no):
-                img = pil_images[i].convert("RGB")
-                width, height = img.size
-
-                d = ImageDraw.Draw(img)
-
-                # center text
-                text_bbox = d.textbbox((x_position, y_position), alignment_obj["value"], font=font)
-                if center_x:
-                    text_width = text_bbox[2] - text_bbox[0]
-                    x_position = (width - text_width)/2
-                if center_y:
-                    text_height = text_bbox[3] - text_bbox[1]
-                    y_position = (height - text_height)/2
+                    # create mask + cropped image
+                    black_img = Image.new('RGB', (width, height), 'black')
+                    pil_images_masks.append(black_img)
+                    black_img = Image.new('RGB', (1, 1), 'black') # to prevent max() from considering these images, use very small size
+                    cropped_pil_images_with_text.append(black_img)  
+                    subtitle_coord.append((0,0,0,0))
 
 
-                # add text to video frames
-                d.text((x_position, y_position), alignment_obj["value"], fill=font_color,font=font)
-                pil_images_with_text.append(img)
+            for frame_idx in range(start_frame_no,end_frame_no):
+                if frame_idx < len(pil_images):
+                    img = pil_images[frame_idx].convert("RGB")
+                    width, height = img.size
 
-                # create mask
-                black_img = Image.new('RGB', (width, height), 'black')
-                d = ImageDraw.Draw(black_img)
-                d.text((x_position, y_position), alignment_obj["value"], fill="white",font=font)    
-                pil_images_masks.append(black_img)    
+                    d = ImageDraw.Draw(img)
 
-                # crop subtitles to black frame
-                text_bbox = d.textbbox((x_position,y_position), alignment_obj["value"], font=font)
-                cropped_text_frame = black_img.crop(text_bbox)
-                cropped_pil_images_with_text.append(cropped_text_frame)
-                subtitle_coord.append(text_bbox)
+                    # center text - 使用临时变量避免修改原参数
+                    text_bbox = d.textbbox((x_position, y_position), alignment_obj["value"], font=font)
+                    current_x = x_position
+                    current_y = y_position
+                    if center_x:
+                        text_width = text_bbox[2] - text_bbox[0]
+                        current_x = (width - text_width)/2
+                    if center_y:
+                        text_height = text_bbox[3] - text_bbox[1]
+                        current_y = (height - text_height)/2
+
+
+                    # add text to video frames
+                    d.text((current_x, current_y), alignment_obj["value"], fill=font_color,font=font)
+                    pil_images_with_text.append(img)
+
+                    # create mask
+                    black_img = Image.new('RGB', (width, height), 'black')
+                    mask_draw = ImageDraw.Draw(black_img)
+                    mask_draw.text((current_x, current_y), alignment_obj["value"], fill="white",font=font)    
+                    pil_images_masks.append(black_img)    
+
+                    # crop subtitles to black frame
+                    final_text_bbox = mask_draw.textbbox((current_x, current_y), alignment_obj["value"], font=font)
+                    cropped_text_frame = black_img.crop(final_text_bbox)
+                    cropped_pil_images_with_text.append(cropped_text_frame)
+                    subtitle_coord.append(final_text_bbox)
 
             
             last_frame_no = end_frame_no

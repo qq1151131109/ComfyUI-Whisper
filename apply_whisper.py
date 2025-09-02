@@ -155,13 +155,14 @@ class ApplyWhisperNode:
             }
             segments_alignment.append(segment_dict)
 
-            # create word alignments
-            for word in segment["words"]:
-                word_dict = {
-                    'value': word["word"].strip(),
-                    'start': word["start"],
-                    'end': word['end']
-                }
-                words_alignment.append(word_dict)
+            # create word alignments - 安全检查words字段
+            if "words" in segment and segment["words"]:
+                for word in segment["words"]:
+                    word_dict = {
+                        'value': word.get("word", "").strip(),
+                        'start': word.get("start", segment['start']),
+                        'end': word.get('end', segment['end'])
+                    }
+                    words_alignment.append(word_dict)
 
         return (result["text"].strip(), segments_alignment, words_alignment)

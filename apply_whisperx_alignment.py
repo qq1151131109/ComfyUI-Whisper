@@ -112,10 +112,7 @@ class WhisperXModelWrapper(torch.nn.Module):
             )
             
             # 估算模型大小用于内存管理
-            if hasattr(self.whisperx_model, 'model'):
-                model_size = sum(p.numel() * p.element_size() 
-                               for p in self.whisperx_model.model.parameters())
-                self.model_loaded_weight_memory = model_size
+            self.model_loaded_weight_memory = self._estimate_model_size()
             
             logger.info(f"WhisperX model '{self.model_name}' loaded successfully")
             return True
@@ -123,6 +120,41 @@ class WhisperXModelWrapper(torch.nn.Module):
         except Exception as e:
             logger.error(f"Failed to load WhisperX model: {e}")
             raise
+    
+    def _estimate_model_size(self):
+        """安全估算WhisperX模型大小"""
+        try:
+            # 尝试多种方法估算模型大小
+            if hasattr(self.whisperx_model, 'model') and hasattr(self.whisperx_model.model, 'parameters'):
+                # 标准PyTorch模型
+                size = sum(p.numel() * p.element_size() for p in self.whisperx_model.model.parameters())
+                logger.info(f"模型大小估算: {size / (1024*1024):.1f} MB (通过parameters)")
+                return size
+            elif hasattr(self.whisperx_model, 'model') and hasattr(self.whisperx_model.model, 'get_memory_stats'):
+                # CTranslate2模型
+                stats = self.whisperx_model.model.get_memory_stats()
+                size = stats.get('model_size', 0)
+                logger.info(f"模型大小估算: {size / (1024*1024):.1f} MB (通过memory_stats)")
+                return size
+            else:
+                # 根据模型名称估算大小（字节）
+                model_sizes = {
+                    'tiny': 150 * 1024 * 1024,      # ~150MB
+                    'base': 280 * 1024 * 1024,      # ~280MB  
+                    'small': 970 * 1024 * 1024,     # ~970MB
+                    'medium': 1940 * 1024 * 1024,   # ~1.9GB
+                    'large-v1': 2900 * 1024 * 1024, # ~2.9GB
+                    'large-v2': 2900 * 1024 * 1024, # ~2.9GB
+                    'large-v3': 2900 * 1024 * 1024, # ~2.9GB
+                    'large': 2900 * 1024 * 1024,    # ~2.9GB
+                }
+                estimated_size = model_sizes.get(self.model_name, 1000 * 1024 * 1024)  # 默认1GB
+                logger.info(f"模型大小估算: {estimated_size / (1024*1024):.1f} MB (根据模型名称)")
+                return estimated_size
+        except Exception as e:
+            logger.warning(f"模型大小估算失败: {e}，使用默认值")
+            # 默认返回1GB
+            return 1024 * 1024 * 1024
 
 
 class WhisperXPatcher(comfy.model_patcher.ModelPatcher):
@@ -181,11 +213,11 @@ class ApplyWhisperXAlignmentNode:
         
         return {
             "required": {
-                "audio": ("AUDIO",),  # 与apply_whisper保持一致
+                "audio": ("AUDIO",),
                 "reference_text": ("STRING", {
                     "multiline": True,
                     "default": "",
-                    "placeholder": "输入准确的文本内容，将与音频进行强制对齐"
+                    "placeholder": "输入准确的参考文本。WhisperX将把此文本中的每个词精确对齐到音频时间点。\n注意：这是真正的强制对齐，需要文本与音频内容完全匹配！"
                 }),
                 "model": (model_options, {"default": "base"}),
             },
@@ -193,7 +225,11 @@ class ApplyWhisperXAlignmentNode:
                 "language": (language_options, {"default": "auto"}),
                 "return_char_alignments": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "是否返回字符级别的对齐信息"
+                    "tooltip": "是否返回字符级别的对齐信息（需要模型支持）"
+                }),
+                "alignment_mode": (["forced_alignment", "asr_with_mapping"], {
+                    "default": "forced_alignment",
+                    "tooltip": "对齐模式：强制对齐（推荐）或ASR转录后映射（备用）"
                 }),
             }
         }
@@ -208,23 +244,38 @@ class ApplyWhisperXAlignmentNode:
                                reference_text: str,
                                model: str,
                                language: str = "auto",
-                               return_char_alignments: bool = False) -> Tuple[str, List[Dict], List[Dict], str]:
+                               return_char_alignments: bool = False,
+                               alignment_mode: str = "forced_alignment") -> Tuple[str, List[Dict], List[Dict], str]:
         """
-        执行WhisperX强制对齐
+        执行WhisperX真正的强制对齐（Forced Alignment）
+        
+        强制对齐是指：给定准确的参考文本和音频，将文本中的每个词/句精确地
+        对齐到音频的具体时间段。这要求参考文本与音频内容完全匹配。
         
         Args:
             audio: 音频张量字典 {"waveform": tensor, "sample_rate": int}
-            reference_text: 准确的参考文本
-            model: 模型大小
+            reference_text: 准确的参考文本（必须与音频内容匹配）
+            model: WhisperX模型大小
             language: 语言（auto为自动检测）
             return_char_alignments: 是否返回字符级对齐
+            alignment_mode: 对齐模式（强制对齐或ASR+映射）
             
         Returns:
-            (对齐文本, 句级对齐, 词级对齐, 处理日志)
+            (对齐后文本, 句级对齐数据, 词级对齐数据, 处理日志)
         """
         log_messages = []
         
         try:
+            # 显示对齐模式
+            mode_display = "强制对齐" if alignment_mode == "forced_alignment" else "ASR+映射对齐"
+            log_messages.append(f"🎯 对齐模式: {mode_display}")
+            
+            if alignment_mode == "forced_alignment":
+                log_messages.append("💡 强制对齐：将参考文本中的每个词精确对齐到音频时间点")
+                log_messages.append("⚠️ 注意：参考文本必须与音频内容完全匹配才能获得最佳效果")
+            else:
+                log_messages.append("💡 ASR+映射：先进行语音识别，再将结果映射到参考文本")
+            
             # 验证输入
             if not reference_text.strip():
                 error_msg = "请提供准确的参考文本用于对齐"
@@ -277,25 +328,23 @@ class ApplyWhisperXAlignmentNode:
             
             log_messages.append("✅ WhisperX模型加载成功")
             
-            # 执行转录（获取初始对齐）
-            log_messages.append("🎵 开始音频转录...")
-            transcribe_options = {}
-            if language_code and language_code != "auto":
-                transcribe_options['language'] = language_code
+            # 真正的强制对齐：使用参考文本与音频进行对齐
+            log_messages.append("🎯 开始真正的强制对齐...")
+            log_messages.append(f"📝 参考文本: {reference_text[:100]}{'...' if len(reference_text) > 100 else ''}")
             
-            audio_result = whisperx_model.transcribe(
-                audio_save_path, 
-                batch_size=16,
-                **transcribe_options
-            )
-            
-            detected_language = audio_result.get("language", language_code or "unknown")
-            log_messages.append(f"🔍 检测到语言: {detected_language}")
+            # 检测语言（如果未指定）
+            if not language_code or language_code == "auto":
+                log_messages.append("🔍 自动检测音频语言...")
+                temp_result = whisperx_model.transcribe(audio_save_path, batch_size=16)
+                detected_language = temp_result.get("language", "en")
+                log_messages.append(f"🔍 检测到语言: {detected_language}")
+            else:
+                detected_language = language_code
+                log_messages.append(f"🌍 使用指定语言: {detected_language}")
             
             # 加载对齐模型
-            log_messages.append("🎯 加载对齐模型...")
+            log_messages.append("🎯 加载强制对齐模型...")
             try:
-                # 转换设备格式用于对齐模型
                 align_device = convert_device_for_whisperx(patcher.load_device)
                 model_a, metadata = whisperx.load_align_model(
                     language_code=detected_language,
@@ -304,29 +353,79 @@ class ApplyWhisperXAlignmentNode:
                 patcher.model.align_model = model_a
                 log_messages.append("✅ 对齐模型加载成功")
             except Exception as e:
-                log_messages.append(f"⚠️ 对齐模型加载失败，使用基础对齐: {e}")
-                model_a, metadata = None, {}
+                error_msg = f"❌ 对齐模型加载失败: {e}"
+                log_messages.append(error_msg)
+                log_messages.append("💡 强制对齐需要对齐模型支持，请检查语言是否受支持")
+                return "", [], [], "\n".join(log_messages)
             
-            # 执行强制对齐
-            log_messages.append("⚡ 开始强制对齐...")
-            if model_a is not None:
+            # 预处理参考文本：分割成句子
+            log_messages.append("✂️ 预处理参考文本...")
+            reference_segments = self._prepare_reference_text(reference_text, detected_language)
+            log_messages.append(f"📄 参考文本分为 {len(reference_segments)} 个句子")
+            
+            # 根据对齐模式选择执行路径
+            if alignment_mode == "forced_alignment":
+                log_messages.append("⚡ 执行真正的强制对齐...")
+                try:
+                    # 构造用于对齐的segments结构，使用参考文本
+                    mock_segments = []
+                    for i, ref_text in enumerate(reference_segments):
+                        mock_segments.append({
+                            "start": 0.0,  # 临时时间，会被对齐覆盖
+                            "end": 0.0,    # 临时时间，会被对齐覆盖
+                            "text": ref_text.strip()
+                        })
+                    
+                    # 使用WhisperX的align函数进行强制对齐
+                    aligned_result = whisperx.align(
+                        mock_segments,
+                        model_a,
+                        metadata,
+                        audio_save_path,
+                        align_device,
+                        return_char_alignments=return_char_alignments
+                    )
+                    
+                    segments = aligned_result["segments"]
+                    words = aligned_result.get("word_segments", [])
+                    
+                    log_messages.append(f"✅ 强制对齐完成: {len(segments)} 句, {len(words)} 词")
+                    
+                except Exception as align_error:
+                    log_messages.append(f"❌ 强制对齐失败: {align_error}")
+                    log_messages.append("🔄 自动降级为ASR+映射模式...")
+                    alignment_mode = "asr_with_mapping"  # 自动切换模式
+            
+            # ASR+映射模式（或强制对齐失败后的降级）
+            if alignment_mode == "asr_with_mapping":
+                log_messages.append("🎙️ 执行ASR转录+文本映射...")
+                
+                # 先进行ASR转录
+                transcribe_result = whisperx_model.transcribe(
+                    audio_save_path,
+                    batch_size=16,
+                    language=detected_language if detected_language != "auto" else None
+                )
+                
+                log_messages.append(f"🎙️ ASR转录完成: {len(transcribe_result['segments'])} 个片段")
+                
+                # 使用转录结果进行对齐
                 aligned_result = whisperx.align(
-                    audio_result["segments"],
+                    transcribe_result["segments"],
                     model_a,
                     metadata,
                     audio_save_path,
-                    align_device,  # 使用字符串格式的设备
+                    align_device,
                     return_char_alignments=return_char_alignments
                 )
-                segments = aligned_result["segments"]
+                
+                segments = aligned_result["segments"] 
                 words = aligned_result.get("word_segments", [])
-            else:
-                # 使用基础转录结果
-                segments = audio_result["segments"]
-                words = []
-                for segment in segments:
-                    if "words" in segment:
-                        words.extend(segment["words"])
+                
+                log_messages.append(f"🔗 ASR对齐完成: {len(segments)} 句, {len(words)} 词")
+                
+                # 尝试将ASR结果映射到参考文本
+                segments, words = self._map_to_reference_text(segments, words, reference_text, log_messages)
             
             log_messages.append(f"🎉 对齐完成! 句子: {len(segments)}, 词语: {len(words)}")
             
@@ -428,6 +527,94 @@ class ApplyWhisperXAlignmentNode:
         
         return intersection / union if union > 0 else 0.0
     
+    def _prepare_reference_text(self, reference_text: str, language: str) -> List[str]:
+        """预处理参考文本，分割成适合对齐的句子片段"""
+        import re
+        
+        # 清理文本
+        text = reference_text.strip()
+        if not text:
+            return []
+        
+        # 根据语言使用不同的分句策略
+        if language in ['zh', 'ja', 'ko']:  # 中日韩语言
+            # 按标点符号分句
+            sentences = re.split(r'[。！？；\.\!\?;]', text)
+        else:  # 其他语言
+            # 按句号、感叹号、问号分句
+            sentences = re.split(r'[\.!\?]+', text)
+        
+        # 清理并过滤空句子
+        processed_sentences = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if sentence:
+                # 对于过长的句子，进一步分割
+                if len(sentence) > 200:  # 字符数阈值
+                    # 按逗号或其他标点进一步分割
+                    sub_sentences = re.split(r'[,，、]', sentence)
+                    for sub in sub_sentences:
+                        sub = sub.strip()
+                        if sub:
+                            processed_sentences.append(sub)
+                else:
+                    processed_sentences.append(sentence)
+        
+        return processed_sentences if processed_sentences else [text]
+    
+    def _map_to_reference_text(self, segments: List[Dict], words: List[Dict], reference_text: str, log_messages: List[str]) -> Tuple[List[Dict], List[Dict]]:
+        """将ASR转录结果映射到参考文本（降级方案）"""
+        log_messages.append("🔄 尝试将ASR结果映射到参考文本...")
+        
+        # 提取ASR转录的文本
+        asr_text = " ".join([seg.get("text", "") for seg in segments])
+        
+        # 计算相似度
+        similarity = self._calculate_text_similarity(reference_text, asr_text)
+        log_messages.append(f"📊 ASR与参考文本相似度: {similarity:.1%}")
+        
+        if similarity > 0.7:  # 相似度阈值
+            log_messages.append("✅ 相似度较高，直接使用ASR对齐结果")
+            return segments, words
+        else:
+            log_messages.append("⚠️ 相似度较低，尝试文本对齐...")
+            
+            # 简单的文本对齐策略：按时间比例分配
+            reference_segments = self._prepare_reference_text(reference_text, "en")
+            total_duration = max([seg.get("end", 0) for seg in segments]) if segments else 0.0
+            
+            aligned_segments = []
+            for i, ref_text in enumerate(reference_segments):
+                start_time = (i / len(reference_segments)) * total_duration
+                end_time = ((i + 1) / len(reference_segments)) * total_duration
+                
+                aligned_segments.append({
+                    "start": start_time,
+                    "end": end_time,
+                    "text": ref_text,
+                    "confidence": 0.5  # 标记为低置信度
+                })
+            
+            # 为mapped segments生成简单的word alignment
+            mapped_words = []
+            for seg in aligned_segments:
+                seg_duration = seg["end"] - seg["start"]
+                seg_words = seg["text"].split()
+                if seg_words:
+                    word_duration = seg_duration / len(seg_words)
+                    for j, word in enumerate(seg_words):
+                        word_start = seg["start"] + j * word_duration
+                        word_end = word_start + word_duration
+                        mapped_words.append({
+                            "start": word_start,
+                            "end": word_end,
+                            "word": word,
+                            "confidence": 0.5
+                        })
+            
+            log_messages.append(f"📝 映射完成: {len(aligned_segments)} 句, {len(mapped_words)} 词")
+            return aligned_segments, mapped_words
+    
     def _analyze_error(self, error_str: str) -> List[str]:
         """分析错误并提供解决建议"""
         suggestions = []
@@ -448,6 +635,15 @@ class ApplyWhisperXAlignmentNode:
                 "   2. 如果问题持续，尝试重启ComfyUI",
                 "   3. 检查CUDA驱动是否正常工作",
                 "   4. 尝试使用CPU模式测试"
+            ])
+        
+        elif "has no attribute 'parameters'" in error_str or "has no attribute" in error_str:
+            suggestions.extend([
+                "🔧 检测到模型结构兼容性问题，建议解决方案：",
+                "   1. ✅ 已自动修复模型大小估算方法",
+                "   2. 尝试重启ComfyUI重新加载修复后的代码",
+                "   3. 如果问题持续，检查WhisperX版本兼容性",
+                "   4. 考虑降级到兼容版本: pip install whisperx==3.1.1"
             ])
         
         elif "device" in error_str.lower():
@@ -492,7 +688,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "ApplyWhisperXAlignmentNode": "Apply WhisperX (Force Alignment)"
+    "ApplyWhisperXAlignmentNode": "🎯 WhisperX 强制对齐 (Forced Alignment)"
 }
 
 

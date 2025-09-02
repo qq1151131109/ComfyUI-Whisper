@@ -1,6 +1,6 @@
 openai-whisper
 pillow
-uuid
+torchaudio
 
 # WhisperX强制对齐依赖（可选）
 # ⚠️ 重要：版本兼容性问题说明

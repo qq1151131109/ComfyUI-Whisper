@@ -35,7 +35,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 # 注册WhisperX强制对齐节点
 if WHISPERX_AVAILABLE:
     NODE_CLASS_MAPPINGS["Apply WhisperX Alignment"] = ApplyWhisperXAlignmentNode
-    NODE_DISPLAY_NAME_MAPPINGS["Apply WhisperX Alignment"] = "🎵 Apply WhisperX (Force Alignment)"
+    NODE_DISPLAY_NAME_MAPPINGS["Apply WhisperX Alignment"] = "🎯 WhisperX 强制对齐 (Forced Alignment)"
 
 # 注册增强字幕节点
 if ENHANCED_SUBTITLES_AVAILABLE:

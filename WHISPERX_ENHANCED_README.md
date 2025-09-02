@@ -4,13 +4,26 @@
 
 本项目在原有ComfyUI-Whisper的基础上新增了两个强大的节点：
 
-1. **🎵 Apply WhisperX (Force Alignment)** - WhisperX强制对齐节点
+1. **🎯 WhisperX 强制对齐 (Forced Alignment)** - 真正的强制对齐节点
 2. **🎨 Add Subtitles (Enhanced)** - 增强字幕添加节点
+
+### 💡 什么是强制对齐 (Forced Alignment)?
+
+**强制对齐**是一种将已知的准确文本与音频进行精确时间同步的技术：
+
+- **输入**：准确的参考文本 + 对应的音频文件
+- **输出**：文本中每个词/句在音频中的精确时间戳
+- **要求**：参考文本必须与音频内容完全匹配
+- **用途**：配音同步、字幕校时、朗读对齐、有声书制作等
+
+**与普通ASR的区别**：
+- **ASR转录**：音频 → 识别出文本（可能有错误）
+- **强制对齐**：准确文本 + 音频 → 精确的时间同步
 
 ### 📁 节点分类
 所有字幕相关节点现在统一归类在 **"字幕"** 目录下，包括：
-- Apply Whisper - 基础语音转录
-- 🎵 Apply WhisperX (Force Alignment) - 强制对齐
+- Apply Whisper - 基础语音转录（ASR）
+- 🎯 WhisperX 强制对齐 - 真正的强制对齐
 - Add Subtitles To Frames - 基础字幕添加  
 - Add Subtitles To Background - 背景字幕
 - 🎨 Add Subtitles (Enhanced) - 增强字幕
@@ -192,9 +205,27 @@ pip install whisperx>=3.1.0
 - 可以尝试重启ComfyUI重新初始化
 ```
 
-**7. 其他设备相关错误**
+**7. 模型结构兼容性错误**
 ```
-错误信息：device相关错误
+错误信息：'WhisperModel' object has no attribute 'parameters'
+解决方案：
+- ✅ 已自动修复：节点会自动使用安全的模型大小估算
+- 如果问题持续，重启ComfyUI重新加载修复后的代码
+- 检查WhisperX版本是否与其他依赖兼容
+```
+
+**8. 版本兼容性警告**
+```
+警告信息：Model was trained with pyannote.audio 0.0.1, yours is 3.x.x
+解决方案：
+- ⚠️ 这些是警告，不影响功能使用
+- 如需消除警告：pip install pyannote.audio==3.1.0
+- 或忽略警告，继续正常使用
+```
+
+**9. 其他设备相关错误**
+```
+错误信息：device相关错误  
 解决方案：
 - 检查CUDA安装状态
 - 重启ComfyUI重新初始化设备
