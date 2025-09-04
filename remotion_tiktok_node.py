@@ -46,8 +46,41 @@ class TikTokCaptionsNode:
     @classmethod
     def INPUT_TYPES(cls):
         style_options = [
-            "CaptionedVideo",  # 基础样式
-            "MinimalStyle",   # 极简样式
+            "CaptionedVideo",          # 基础样式
+            "MinimalStyle",            # 极简样式
+            "NeonGlowStyle",           # 霓虹发光
+            "RetroWaveStyle",          # 复古波浪
+            "GlitchStyle",             # 故障风格
+            "GlassmorphismStyle",      # 玻璃态
+            "GradientRainbowStyle",    # 彩虹渐变
+            "CartoonBubbleStyle",      # 卡通气泡
+            "MetallicStyle",           # 金属质感
+            "NeonBorderStyle",         # 霓虹边框
+            "PixelArtStyle",           # 像素艺术
+            "ElegantShadowStyle",      # 优雅阴影
+            "Embossed3DStyle",         # 3D浮雕
+            "FluidGradientStyle",      # 流体渐变
+            "TechWireframeStyle",      # 科技线框
+            "BouncyBallStyle",         # 弹跳球
+            "SpinSpiralStyle",         # 旋转螺旋
+            "ElasticZoomStyle",        # 弹性缩放
+            "SwayBeatStyle",           # 摇摆节拍
+            "ShakeImpactStyle",        # 震动冲击
+            "FireFlameStyle",          # 火焰特效
+            "WaterRippleStyle",        # 水波纹
+            "ElectricLightningStyle",  # 电光特效
+            "SmokeMistStyle",          # 烟雾迷雾
+            "StarryParticleStyle",     # 星空粒子
+            "QuantumTeleportStyle",    # 量子传送
+            "HologramStyle",           # 全息投影
+            "MagicSpellStyle",         # 魔法咒语
+            "CyberpunkHackerStyle",    # 赛博朋克黑客
+            "CosmicGalaxyStyle",       # 宇宙银河
+            "SpaceTimeWarpStyle",      # 时空扭曲
+            "DiamondCrystalStyle",     # 钻石水晶
+            "AudioWaveStyle",          # 音频波形
+            "LiquidMetalStyle",        # 液态金属
+            "RainbowAuroraStyle",      # 彩虹极光
         ]
         
         return {
