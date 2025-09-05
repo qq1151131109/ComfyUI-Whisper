@@ -235,6 +235,7 @@ export const RemotionRoot: React.FC = () => {
         height={1920}
         defaultProps={{
           src: staticFile("sample-video.mp4"),
+          durationInSeconds: 15.0,
         }}
       />
       <Composition

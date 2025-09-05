@@ -19,21 +19,20 @@ import { Caption, createTikTokStyleCaptions } from "@remotion/captions";
 import { MinimalStyle } from "./MinimalStyle";
 
 export const minimalVideoSchema = z.object({
-  src: z.string().optional(),
-  videoPath: z.string().optional(),
-  captionsPath: z.string().optional(),
+  src: z.string(),
+  durationInSeconds: z.number().optional(),
 });
 
 export const calculateMinimalVideoMetadata: CalculateMetadataFunction<
   z.infer<typeof minimalVideoSchema>
 > = async ({ props }) => {
   const fps = 30;
-  // 使用默认时长，避免在metadata阶段访问视频文件
-  const defaultDurationInSeconds = 10; // 10秒默认时长
+  // 使用传入的时长或默认时长
+  const durationInSeconds = props.durationInSeconds || 15.0;
   
   return {
     fps,
-    durationInFrames: Math.floor(defaultDurationInSeconds * fps),
+    durationInFrames: Math.floor(durationInSeconds * fps),
   };
 };
 
@@ -48,55 +47,43 @@ const getFileExists = (file: string) => {
 const SWITCH_CAPTIONS_EVERY_MS = 1200;
 
 export const MinimalVideo: React.FC<{
-  src?: string;
-  videoPath?: string;
-  captionsPath?: string;
-}> = ({ src, videoPath, captionsPath }) => {
+  src: string;
+  durationInSeconds?: number;
+}> = ({ src, durationInSeconds }) => {
   const [subtitles, setSubtitles] = useState<Caption[]>([]);
   const [handle] = useState(() => delayRender());
   const { fps } = useVideoConfig();
 
   // 确定视频源和字幕文件路径
-  const videoSrc = videoPath || src || "sample-video.mp4";
-  const subtitlesFile = captionsPath || (src ? src.replace(/.mp4$/, ".json").replace(/.mkv$/, ".json").replace(/.mov$/, ".json").replace(/.webm$/, ".json") : "sample-video.json");
+  const videoSrc = src;
+  const subtitlesFile = src.replace(/.mp4$/, ".json").replace(/.mkv$/, ".json").replace(/.mov$/, ".json").replace(/.webm$/, ".json");
 
   const fetchSubtitles = useCallback(async () => {
     try {
       await loadFont();
       
-      let data: Caption[];
-      if (captionsPath) {
-        // 如果提供了绝对路径，使用Node.js fs模块读取
-        const fs = await import('fs/promises');
-        const content = await fs.readFile(captionsPath, 'utf-8');
-        data = JSON.parse(content) as Caption[];
-      } else {
-        // 否则使用默认的fetch方式
-        const res = await fetch(subtitlesFile);
-        data = (await res.json()) as Caption[];
-      }
+      // 使用fetch方式获取字幕文件
+      const res = await fetch(subtitlesFile);
+      const data = (await res.json()) as Caption[];
       
       setSubtitles(data);
       continueRender(handle);
     } catch (e) {
       cancelRender(e);
     }
-  }, [handle, subtitlesFile, captionsPath]);
+  }, [handle, subtitlesFile]);
 
   useEffect(() => {
     fetchSubtitles();
 
-    if (!captionsPath) {
-      // 只有在使用相对路径时才watch文件
-      const c = watchStaticFile(subtitlesFile, () => {
-        fetchSubtitles();
-      });
+    const c = watchStaticFile(subtitlesFile, () => {
+      fetchSubtitles();
+    });
 
-      return () => {
-        c.cancel();
-      };
-    }
-  }, [fetchSubtitles, src, subtitlesFile, captionsPath]);
+    return () => {
+      c.cancel();
+    };
+  }, [fetchSubtitles, src, subtitlesFile]);
 
   const { pages } = useMemo(() => {
     return createTikTokStyleCaptions({

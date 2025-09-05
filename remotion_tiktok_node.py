@@ -282,7 +282,7 @@ class TikTokCaptionsNode:
         
         logger.info(f"计算视频时长: 字幕最大时间={max_end_time}ms, 设置时长={video_duration}秒")
         
-        # 传递文件名和时长参数
+        # 传递文件名和时长参数 - 使用 staticFile() 格式
         props = {
             "src": temp_video_name,
             "durationInSeconds": video_duration,
